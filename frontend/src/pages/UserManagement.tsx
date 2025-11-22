@@ -34,7 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 import { UserRole } from "@/contexts/AuthContext";
 
 interface User {
-  id: string;
+  _id: string;
   email: string;
   name: string;
   role: UserRole;
@@ -55,7 +55,7 @@ const UserManagement = () => {
     name: "",
     email: "",
     password: "",
-    role: "student" as UserRole,
+    role: "teacher" as UserRole,
   });
 
   // Load users on mount
@@ -112,7 +112,7 @@ const UserManagement = () => {
     if (!selectedUser) return;
 
     try {
-      await apiService.updateUserRole(selectedUser.id, formData.role);
+      await apiService.updateUserRole(selectedUser._id, formData.role);
       
       // Refresh user list
       const updatedUsers = await apiService.getAllUsers();
@@ -143,7 +143,7 @@ const UserManagement = () => {
     if (!userToDelete) return;
 
     try {
-      await apiService.deleteUser(userToDelete.id);
+      await apiService.deleteUser(userToDelete._id);
       
       // Refresh user list
       const updatedUsers = await apiService.getAllUsers();
@@ -192,14 +192,14 @@ const UserManagement = () => {
       <div className="p-8">
         <div className="flex justify-between items-center mb-6">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">User Management</h1>
+            <h1 className="text-3xl font-bold text-foreground">Teacher Management</h1>
             <p className="text-muted-foreground mt-1">
-              Manage user accounts and role permissions
+              Manage teacher accounts and permissions
             </p>
           </div>
           <Button onClick={() => setIsAddDialogOpen(true)}>
             <Plus className="w-4 h-4 mr-2" />
-            Add User
+            Add Teacher
           </Button>
         </div>
 
@@ -221,7 +221,7 @@ const UserManagement = () => {
             </TableHeader>
             <TableBody>
               {users.map((user) => (
-                <TableRow key={user.id}>
+                <TableRow key={user._id}>
                   <TableCell className="font-medium">{user.name}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -266,9 +266,9 @@ const UserManagement = () => {
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add New User</DialogTitle>
+              <DialogTitle>Add New Teacher</DialogTitle>
               <DialogDescription>
-                Create a new user account and assign a role
+                Create a new teacher account with access to manage students and attendance
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
@@ -319,18 +319,19 @@ const UserManagement = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="student">Student</SelectItem>
                     <SelectItem value="teacher">Teacher</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Only teachers can be added here. Students are added via the Students page.
+                </p>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleAddUser}>Add User</Button>
+              <Button onClick={handleAddUser}>Add Teacher</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

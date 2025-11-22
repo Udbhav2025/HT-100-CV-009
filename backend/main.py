@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, date, timedelta
+from bson import ObjectId
 import cv2
 import numpy as np
 from deepface import DeepFace
@@ -198,11 +199,36 @@ async def get_current_user_info(current_user: dict = Depends(lambda: get_current
     }
 
 @app.get("/api/auth/users")
-async def get_all_users(current_user: dict = Depends(require_admin)):
+async def get_all_users(current_user: dict = Depends(require_admin(user_manager))):
     """Get all users (admin only)"""
     try:
         users = user_manager.get_all_users()
         return {"success": True, "data": users}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/auth/users/{user_id}")
+async def delete_user(user_id: str, current_user: dict = Depends(require_admin(user_manager))):
+    """Delete a user (admin only)"""
+    try:
+        # Get user by ID first
+        user = user_manager.users.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Don't allow deleting yourself
+        if user["email"] == current_user["email"]:
+            raise HTTPException(status_code=400, detail="Cannot delete your own account")
+        
+        # Delete the user
+        success = user_manager.delete_user(user["email"])
+        
+        if success:
+            return {"success": True, "message": "User deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -308,7 +334,7 @@ async def get_student(student_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/students")
-async def create_student(student: StudentCreate, current_user: dict = Depends(require_teacher)):
+async def create_student(student: StudentCreate, current_user: dict = Depends(require_teacher(user_manager))):
     """Create a new student (requires teacher role)"""
     try:
         success = db.add_student(

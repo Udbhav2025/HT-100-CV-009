@@ -5,11 +5,12 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Plus, Search, User, Mail, Phone, Image, Upload as UploadIcon } from "lucide-react";
+import { Plus, Search, User, Mail, Phone, Image, Upload as UploadIcon, Trash2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiService } from "@/services/api";
 import { PhotoUpload } from "@/components/PhotoUpload";
+import { StudentPhotoUploader } from "@/components/StudentPhotoUploader";
 import { toast } from "sonner";
 
 interface Student {
@@ -26,6 +27,7 @@ const Students = () => {
   const [loading, setLoading] = useState(true);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [newStudent, setNewStudent] = useState({
     student_id: "",
     name: "",
@@ -71,20 +73,88 @@ const Students = () => {
   };
 
   const handleAddStudent = async () => {
+    // Validate required fields
+    if (!newStudent.student_id || !newStudent.name) {
+      toast.error("Student ID and Name are required");
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
+      console.log("Adding student:", newStudent);
+      
+      // Step 1: Create student
       await apiService.createStudent(newStudent);
-      toast.success("Student added successfully!");
+      
+      // Step 2: Upload photos if any
+      const tempPhotos = (window as any).tempStudentPhotos || [];
+      if (tempPhotos.length > 0) {
+        toast.info(`Uploading ${tempPhotos.length} photo(s)...`);
+        
+        let uploadedCount = 0;
+        for (const photo of tempPhotos) {
+          try {
+            const formData = new FormData();
+            formData.append('file', photo.file);
+            formData.append('photo_type', photo.type);
+            formData.append('description', `${photo.type} photo`);
+
+            const token = localStorage.getItem('auth_token');
+            const response = await fetch(
+              `http://localhost:8000/api/students/${newStudent.student_id}/photos`,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+                body: formData,
+              }
+            );
+
+            if (response.ok) {
+              uploadedCount++;
+            }
+          } catch (error) {
+            console.error("Photo upload error:", error);
+          }
+        }
+        
+        toast.success(`Student added with ${uploadedCount} photo(s)!`);
+      } else {
+        toast.success("Student added successfully!");
+      }
+      
+      // Clear temp photos
+      delete (window as any).tempStudentPhotos;
+      
       setShowAddDialog(false);
       setNewStudent({ student_id: "", name: "", email: "", phone: "" });
       fetchStudents();
     } catch (error: any) {
+      console.error("Add student error:", error);
       toast.error(error.message || "Failed to add student");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handlePhotoUploadSuccess = () => {
     toast.success("Photo uploaded!");
     fetchStudents();
+  };
+
+  const handleDeleteStudent = async (studentId: string, studentName: string) => {
+    if (!confirm(`Are you sure you want to delete ${studentName}? This will also delete all their photos and attendance records.`)) {
+      return;
+    }
+
+    try {
+      await apiService.deleteStudent(studentId);
+      toast.success(`${studentName} deleted successfully`);
+      fetchStudents();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete student");
+    }
   };
 
   const filteredStudents = students.filter((student) =>
@@ -111,50 +181,86 @@ const Students = () => {
                   Add Student
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="max-w-3xl max-h-[95vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Add New Student</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
-                  <div>
-                    <Label htmlFor="student_id">Student ID</Label>
-                    <Input
-                      id="student_id"
-                      placeholder="STU001"
-                      value={newStudent.student_id}
-                      onChange={(e) => setNewStudent({ ...newStudent, student_id: e.target.value })}
+                  {/* Student Details */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="student_id">
+                        Student ID <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="student_id"
+                        placeholder="STU001"
+                        value={newStudent.student_id}
+                        onChange={(e) => setNewStudent({ ...newStudent, student_id: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="name">
+                        Full Name <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="name"
+                        placeholder="John Doe"
+                        value={newStudent.name}
+                        onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="email">Email (Optional)</Label>
+                      <Input
+                        id="email"
+                        type="email"
+                        placeholder="john@school.com"
+                        value={newStudent.email}
+                        onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="phone">Phone (Optional)</Label>
+                      <Input
+                        id="phone"
+                        placeholder="+1234567890"
+                        value={newStudent.phone}
+                        onChange={(e) => setNewStudent({ ...newStudent, phone: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Photo Upload Section */}
+                  <div className="border-t pt-4 mt-4">
+                    <div className="bg-blue-50 p-3 rounded-lg mb-3">
+                      <Label className="text-base font-semibold mb-2 block">
+                        📸 Student Photos (Optional)
+                      </Label>
+                      <p className="text-sm text-muted-foreground">
+                        Upload multiple photos for better face recognition accuracy
+                      </p>
+                    </div>
+                    <StudentPhotoUploader 
+                      onPhotosChange={(photos) => {
+                        // Store photos temporarily
+                        (window as any).tempStudentPhotos = photos;
+                        console.log('Photos updated:', photos.length);
+                      }}
                     />
                   </div>
-                  <div>
-                    <Label htmlFor="name">Full Name</Label>
-                    <Input
-                      id="name"
-                      placeholder="John Doe"
-                      value={newStudent.name}
-                      onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="email">Email</Label>
-                    <Input
-                      id="email"
-                      type="email"
-                      placeholder="john@school.com"
-                      value={newStudent.email}
-                      onChange={(e) => setNewStudent({ ...newStudent, email: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="phone">Phone</Label>
-                    <Input
-                      id="phone"
-                      placeholder="+1234567890"
-                      value={newStudent.phone}
-                      onChange={(e) => setNewStudent({ ...newStudent, phone: e.target.value })}
-                    />
-                  </div>
-                  <Button onClick={handleAddStudent} className="w-full">
-                    Add Student
+
+                  <Button 
+                    onClick={handleAddStudent} 
+                    className="w-full"
+                    disabled={isSubmitting || !newStudent.student_id || !newStudent.name}
+                  >
+                    {isSubmitting ? "Adding..." : "Add Student"}
                   </Button>
                 </div>
               </DialogContent>
@@ -224,42 +330,55 @@ const Students = () => {
                     </div>
 
                     {/* Actions */}
-                    <div className="w-full flex gap-2">
+                    <div className="w-full space-y-2">
+                      <div className="flex gap-2">
+                        {canEdit && (
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="flex-1"
+                                onClick={() => setSelectedStudent(student)}
+                              >
+                                <UploadIcon className="w-4 h-4 mr-1" />
+                                Photos
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-w-2xl">
+                              <DialogHeader>
+                                <DialogTitle>Upload Photos for {student.name}</DialogTitle>
+                              </DialogHeader>
+                              <PhotoUpload 
+                                studentId={student.student_id}
+                                onUploadSuccess={handlePhotoUploadSuccess}
+                              />
+                            </DialogContent>
+                          </Dialog>
+                        )}
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="flex-1"
+                          onClick={() => {
+                            // View student details
+                            toast.info("View details coming soon");
+                          }}
+                        >
+                          View
+                        </Button>
+                      </div>
                       {canEdit && (
-                        <Dialog>
-                          <DialogTrigger asChild>
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              className="flex-1"
-                              onClick={() => setSelectedStudent(student)}
-                            >
-                              <UploadIcon className="w-4 h-4 mr-1" />
-                              Photos
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent className="max-w-2xl">
-                            <DialogHeader>
-                              <DialogTitle>Upload Photos for {student.name}</DialogTitle>
-                            </DialogHeader>
-                            <PhotoUpload 
-                              studentId={student.student_id}
-                              onUploadSuccess={handlePhotoUploadSuccess}
-                            />
-                          </DialogContent>
-                        </Dialog>
+                        <Button 
+                          variant="destructive" 
+                          size="sm" 
+                          className="w-full"
+                          onClick={() => handleDeleteStudent(student.student_id, student.name)}
+                        >
+                          <Trash2 className="w-4 h-4 mr-1" />
+                          Delete
+                        </Button>
                       )}
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="flex-1"
-                        onClick={() => {
-                          // View student details
-                          toast.info("View details coming soon");
-                        }}
-                      >
-                        View
-                      </Button>
                     </div>
                   </div>
                 </CardContent>

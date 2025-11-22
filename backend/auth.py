@@ -197,9 +197,9 @@ def get_current_user(token_data: TokenData = Depends(verify_token), user_manager
     return user
 
 # Role-based access control
-def require_role(required_role: str):
+def require_role(required_role: str, user_manager: UserManager):
     """Decorator to require specific role"""
-    def role_checker(current_user: dict = Depends(get_current_user)):
+    def role_checker(current_user: dict = Depends(lambda token_data=Depends(verify_token): get_current_user(token_data, user_manager))):
         if current_user["role"] != required_role and current_user["role"] != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -208,9 +208,9 @@ def require_role(required_role: str):
         return current_user
     return role_checker
 
-# Convenience functions
-def require_teacher():
-    return require_role("teacher")
+# Convenience functions - these need to be called with user_manager
+def require_teacher(user_manager: UserManager):
+    return require_role("teacher", user_manager)
 
-def require_admin():
-    return require_role("admin")
+def require_admin(user_manager: UserManager):
+    return require_role("admin", user_manager)
