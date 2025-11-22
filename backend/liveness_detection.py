@@ -62,13 +62,13 @@ class LivenessDetector:
         print(f"  Texture variance: {variance:.2f}")
         
         # Real faces have higher texture variance
-        # Made more strict to catch phone displays
-        if variance < 80:
-            return False, 0.2  # Too smooth - likely printed photo or screen
-        elif variance > 150:
+        # Balanced thresholds
+        if variance < 15:
+            return False, 0.2  # Very smooth - likely printed photo or screen
+        elif variance > 25:
             return True, 0.9  # Good texture - likely real
         else:
-            return False, 0.5  # Borderline - reject to be safe
+            return True, 0.6  # Borderline - allow but lower score
     
     def check_color_diversity(self, face_img):
         """
@@ -125,13 +125,13 @@ class LivenessDetector:
         print(f"  Bright spots: {bright_ratio:.4f}, Moderate: {moderate_ratio:.4f}")
         
         # Too many bright spots suggest screen reflection
-        # Made more strict to catch phone screens
-        if bright_ratio > 0.08 or moderate_ratio > 0.25:
+        # Balanced thresholds
+        if bright_ratio > 0.20 or moderate_ratio > 0.35:
             return False, 0.2  # Likely screen reflection or glow
-        elif bright_ratio < 0.03 and moderate_ratio < 0.15:
+        elif bright_ratio < 0.10 and moderate_ratio < 0.25:
             return True, 0.9  # No suspicious reflections
         else:
-            return False, 0.5  # Borderline - reject to be safe
+            return True, 0.6  # Borderline - allow but lower score
     
     def check_screen_pattern(self, face_img):
         """
@@ -163,12 +163,14 @@ class LivenessDetector:
         print(f"  High-freq energy: {high_freq_energy:.2f}")
         
         # Screens have more high-frequency energy due to pixel grid
-        if high_freq_energy > 15:
-            return False, 0.2  # Likely screen with pixel pattern
-        elif high_freq_energy < 10:
-            return True, 0.9  # No screen pattern
+        # Very high values (>100) are actually from camera noise, not screens
+        # Screens typically have moderate high-freq energy (20-80)
+        if 20 < high_freq_energy < 80:
+            return False, 0.3  # Likely screen with pixel pattern
+        elif high_freq_energy < 15 or high_freq_energy > 100:
+            return True, 0.9  # No screen pattern (too low or camera noise)
         else:
-            return False, 0.5  # Borderline
+            return True, 0.6  # Borderline
     
     def check_depth_cues(self, face_img):
         """
@@ -194,13 +196,13 @@ class LivenessDetector:
         
         print(f"  Edge variance: {edge_variance:.2f}")
         
-        # Made more strict to catch flat displays
-        if edge_variance < 200:
+        # Balanced thresholds for depth detection
+        if edge_variance < 100:
             return False, 0.3  # Too uniform - likely flat photo or screen
-        elif edge_variance > 600:
+        elif edge_variance > 400:
             return True, 0.9  # Good depth variation
         else:
-            return False, 0.5  # Borderline - reject to be safe
+            return True, 0.6  # Borderline - allow but lower score
     
     def detect_liveness(self, face_img, movement_history=None):
         """
@@ -245,13 +247,17 @@ class LivenessDetector:
         avg_score = np.mean(scores)
         
         # Determine if live based on multiple checks
-        # Made MUCH more strict - need at least 5 out of 6 checks to pass with high scores
-        passing_checks = sum(1 for check in checks.values() if check['is_live'] and check['score'] > 0.7)
-        high_score_checks = sum(1 for check in checks.values() if check['score'] > 0.8)
+        # Balanced approach - need majority of checks to pass
+        passing_checks = sum(1 for check in checks.values() if check['is_live'] and check['score'] > 0.5)
+        high_score_checks = sum(1 for check in checks.values() if check['score'] > 0.7)
+        failing_checks = sum(1 for check in checks.values() if not check['is_live'])
         
-        # Very strict criteria to prevent phone display spoofing
-        # Need 5/6 checks passing AND at least 3 with high scores
-        is_live = passing_checks >= 5 and avg_score > 0.75 and high_score_checks >= 3
+        # Balanced criteria:
+        # - Need at least 4/6 checks passing
+        # - Average score > 0.65
+        # - At least 2 high-confidence checks
+        # - No more than 2 checks failing badly
+        is_live = passing_checks >= 4 and avg_score > 0.65 and high_score_checks >= 2 and failing_checks <= 2
         
         print(f"  Liveness decision: passing={passing_checks}/6, high_score={high_score_checks}/6, avg={avg_score:.2f}, is_live={is_live}")
         
