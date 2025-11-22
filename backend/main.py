@@ -27,6 +27,7 @@ from auth import (
     require_teacher, require_admin,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
+from liveness_detection import EnhancedStudentTracker, LivenessDetector
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -54,40 +55,11 @@ camera_active = False
 camera = None
 active_websockets = []
 
-# Student tracker for liveness detection
-class StudentTracker:
-    def __init__(self, student_id, name):
-        self.student_id = student_id
-        self.name = name
-        self.movement_history = deque(maxlen=30)
-        self.last_position = None
-        self.suspicion_score = 0
-        self.last_seen = datetime.now()
-        self.entry_logged = False
-    
-    def update_metrics(self, bbox):
-        current_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
-        if self.last_position:
-            movement = np.sqrt(
-                (current_center[0] - self.last_position[0])**2 + 
-                (current_center[1] - self.last_position[1])**2
-            )
-            self.movement_history.append(movement)
-        self.last_position = current_center
-        self.last_seen = datetime.now()
-        
-        # Calculate suspicion
-        if len(self.movement_history) >= 20:
-            avg_movement = np.mean(list(self.movement_history))
-            if avg_movement < 2:
-                self.suspicion_score += 1
-            else:
-                self.suspicion_score = max(0, self.suspicion_score - 0.5)
-    
-    def is_suspicious(self):
-        return self.suspicion_score > 10
-
+# Student trackers with liveness detection
 student_trackers = {}
+
+# Global liveness detector
+liveness_detector = LivenessDetector()
 
 # ==================== PYDANTIC MODELS ====================
 
@@ -642,19 +614,50 @@ async def recognize_from_frame(file: UploadFile = File(...)):
         unknown_faces = []
         
         for (x, y, w, h) in faces:
+            # Extract face image for liveness detection
+            face_img = frame[int(y):int(y+h), int(x):int(x+w)]
+            
             # Recognize face
             student_id, name = recognize_face(frame, (int(x), int(y), int(w), int(h)))
             
             if student_id:
-                # Known student - Mark attendance
-                db.mark_entry(student_id)
+                # Perform liveness detection
+                is_live, liveness_score, liveness_checks = liveness_detector.detect_liveness(face_img)
                 
-                detected_students.append({
-                    "student_id": student_id,
-                    "name": name,
-                    "bbox": [int(x), int(y), int(w), int(h)],
-                    "status": "recognized"
-                })
+                print(f"Liveness check for {name}: is_live={is_live}, score={liveness_score:.2f}")
+                
+                if not is_live:
+                    # Spoofing detected!
+                    spoofing_type = liveness_detector.get_spoofing_type(liveness_checks)
+                    print(f"⚠️ SPOOFING DETECTED: {spoofing_type} for {name}")
+                    
+                    # Log as suspicious activity
+                    db.log_suspicious_activity(
+                        student_id=student_id,
+                        activity_type="spoofing_attempt",
+                        description=f"Liveness check failed (score: {liveness_score:.2f}). Suspected {spoofing_type}. Details: {liveness_checks}"
+                    )
+                    
+                    detected_students.append({
+                        "student_id": student_id,
+                        "name": name,
+                        "bbox": [int(x), int(y), int(w), int(h)],
+                        "status": "spoofing_detected",
+                        "liveness_score": float(liveness_score),
+                        "spoofing_type": spoofing_type,
+                        "warning": "Attendance NOT marked - spoofing detected"
+                    })
+                else:
+                    # Real person - Mark attendance
+                    db.mark_entry(student_id)
+                    
+                    detected_students.append({
+                        "student_id": student_id,
+                        "name": name,
+                        "bbox": [int(x), int(y), int(w), int(h)],
+                        "status": "recognized",
+                        "liveness_score": float(liveness_score)
+                    })
             else:
                 # Unknown person - Log as suspicious
                 print(f"⚠️  Unknown person detected at position ({x}, {y})")
@@ -714,25 +717,39 @@ async def websocket_camera(websocket: WebSocket):
             unknown_faces = []
             
             for (x, y, w, h) in faces:
+                # Extract face image for liveness detection
+                face_img = frame[y:y+h, x:x+w]
+                
                 # Recognize face
                 student_id, name = recognize_face(frame, (x, y, w, h))
                 
                 if student_id:
-                    # Known student - Track and monitor
+                    # Known student - Track and monitor with liveness
                     if student_id not in student_trackers:
-                        student_trackers[student_id] = StudentTracker(student_id, name)
-                        db.mark_entry(student_id)
+                        student_trackers[student_id] = EnhancedStudentTracker(student_id, name)
                     
                     tracker = student_trackers[student_id]
-                    tracker.update_metrics((x, y, x+w, y+h))
+                    tracker.update_metrics((x, y, x+w, y+h), face_img)
                     
-                    # Check for suspicious behavior
+                    # Check for suspicious behavior or spoofing
                     if tracker.is_suspicious():
-                        db.log_suspicious_activity(
-                            student_id,
-                            "static_behavior",
-                            "No movement detected for extended period"
-                        )
+                        if tracker.spoofing_detected:
+                            db.log_suspicious_activity(
+                                student_id,
+                                "spoofing_attempt",
+                                f"Liveness check failed. Suspected {tracker.spoofing_type}. Score: {tracker.liveness_score:.2f}"
+                            )
+                        else:
+                            db.log_suspicious_activity(
+                                student_id,
+                                "static_behavior",
+                                "No movement detected for extended period"
+                            )
+                    
+                    # Mark attendance only if live
+                    if tracker.is_live and not tracker.entry_logged:
+                        db.mark_entry(student_id)
+                        tracker.entry_logged = True
                     
                     detected_students.append({
                         "student_id": student_id,
@@ -740,13 +757,25 @@ async def websocket_camera(websocket: WebSocket):
                         "bbox": [x, y, w, h],
                         "suspicious": tracker.is_suspicious(),
                         "suspicion_score": tracker.suspicion_score,
-                        "status": "recognized"
+                        "status": "spoofing" if tracker.spoofing_detected else "recognized",
+                        "liveness_score": tracker.liveness_score,
+                        "is_live": tracker.is_live,
+                        "spoofing_type": tracker.spoofing_type
                     })
                     
-                    # Draw on frame - Green for normal, Red for suspicious
-                    color = (0, 0, 255) if tracker.is_suspicious() else (0, 255, 0)
+                    # Draw on frame - Red for spoofing, Orange for suspicious, Green for normal
+                    if tracker.spoofing_detected:
+                        color = (0, 0, 255)  # Red for spoofing
+                        label = f"{name} - SPOOF!"
+                    elif tracker.is_suspicious():
+                        color = (0, 165, 255)  # Orange for suspicious
+                        label = f"{name} - SUSPICIOUS"
+                    else:
+                        color = (0, 255, 0)  # Green for normal
+                        label = name
+                    
                     cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
-                    cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    cv2.putText(frame, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 else:
                     # Unknown person - Flag as suspicious
                     unknown_id = f"UNKNOWN_{datetime.now().timestamp()}"

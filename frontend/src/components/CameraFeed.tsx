@@ -216,14 +216,25 @@ export const CameraFeed = ({ isActive, onError }: CameraFeedProps) => {
         <div className="absolute bottom-2 left-2 right-2 bg-black/70 text-white p-3 rounded-lg z-10">
           {detectedStudents.length > 0 && (
             <>
-              <p className="text-xs font-semibold mb-2">✓ Recognized Students:</p>
-              {detectedStudents.map((student, index) => (
-                <div key={index} className="flex items-center gap-2 text-sm mb-1">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="font-medium">{student.name}</span>
-                  <span className="text-xs text-gray-300">({student.student_id})</span>
-                </div>
-              ))}
+              <p className="text-xs font-semibold mb-2">✓ Detected:</p>
+              {detectedStudents.map((student, index) => {
+                const isSpoofing = student.status === 'spoofing' || student.status === 'spoofing_detected';
+                const livenessScore = student.liveness_score || 1.0;
+                
+                return (
+                  <div key={index} className={`flex items-center gap-2 text-sm mb-1 ${isSpoofing ? 'text-red-400' : ''}`}>
+                    <div className={`w-2 h-2 rounded-full ${isSpoofing ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
+                    <span className="font-medium">{student.name}</span>
+                    <span className="text-xs text-gray-300">({student.student_id})</span>
+                    {isSpoofing && (
+                      <span className="text-xs text-red-400 font-bold">⚠️ SPOOF!</span>
+                    )}
+                    {livenessScore < 0.7 && !isSpoofing && (
+                      <span className="text-xs text-yellow-400">Low liveness: {(livenessScore * 100).toFixed(0)}%</span>
+                    )}
+                  </div>
+                );
+              })}
             </>
           )}
           
