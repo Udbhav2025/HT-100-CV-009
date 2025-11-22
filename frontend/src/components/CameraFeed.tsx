@@ -14,6 +14,7 @@ export const CameraFeed = ({ isActive, onError }: CameraFeedProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [detectedStudents, setDetectedStudents] = useState<any[]>([]);
+  const [unknownFaces, setUnknownFaces] = useState<any[]>([]);
 
   useEffect(() => {
     if (isActive) {
@@ -123,6 +124,12 @@ export const CameraFeed = ({ isActive, onError }: CameraFeedProps) => {
           const data = await response.json();
           console.log('Recognition result:', data);
           setDetectedStudents(data.detected_students || []);
+          setUnknownFaces(data.unknown_faces || []);
+          
+          // Alert if unknown person detected
+          if (data.unknown_count > 0) {
+            console.warn(`⚠️ ${data.unknown_count} unknown person(s) detected!`);
+          }
         }
       } catch (error) {
         console.error('Recognition error:', error);
@@ -151,6 +158,7 @@ export const CameraFeed = ({ isActive, onError }: CameraFeedProps) => {
     }
     
     setDetectedStudents([]);
+    setUnknownFaces([]);
   };
 
   if (!isActive) {
@@ -203,17 +211,34 @@ export const CameraFeed = ({ isActive, onError }: CameraFeedProps) => {
         Live
       </div>
 
-      {/* Detected Students */}
-      {detectedStudents.length > 0 && (
+      {/* Detected Students and Unknown Persons */}
+      {(detectedStudents.length > 0 || unknownFaces.length > 0) && (
         <div className="absolute bottom-2 left-2 right-2 bg-black/70 text-white p-3 rounded-lg z-10">
-          <p className="text-xs font-semibold mb-2">Detected Students:</p>
-          {detectedStudents.map((student, index) => (
-            <div key={index} className="flex items-center gap-2 text-sm mb-1">
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-              <span className="font-medium">{student.name}</span>
-              <span className="text-xs text-gray-300">({student.student_id})</span>
-            </div>
-          ))}
+          {detectedStudents.length > 0 && (
+            <>
+              <p className="text-xs font-semibold mb-2">✓ Recognized Students:</p>
+              {detectedStudents.map((student, index) => (
+                <div key={index} className="flex items-center gap-2 text-sm mb-1">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="font-medium">{student.name}</span>
+                  <span className="text-xs text-gray-300">({student.student_id})</span>
+                </div>
+              ))}
+            </>
+          )}
+          
+          {unknownFaces.length > 0 && (
+            <>
+              <p className="text-xs font-semibold mb-2 mt-3 text-orange-400">⚠️ Unknown Persons Detected:</p>
+              {unknownFaces.map((face, index) => (
+                <div key={index} className="flex items-center gap-2 text-sm mb-1 text-orange-300">
+                  <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
+                  <span className="font-medium">Unknown Person #{index + 1}</span>
+                  <span className="text-xs">(Logged as suspicious)</span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

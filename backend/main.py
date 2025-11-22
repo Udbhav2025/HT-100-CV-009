@@ -639,25 +639,54 @@ async def recognize_from_frame(file: UploadFile = File(...)):
         faces = detect_faces(frame)
         print(f"Detected {len(faces)} face(s) in frame")
         detected_students = []
+        unknown_faces = []
         
         for (x, y, w, h) in faces:
             # Recognize face
             student_id, name = recognize_face(frame, (int(x), int(y), int(w), int(h)))
             
             if student_id:
-                # Mark attendance
+                # Known student - Mark attendance
                 db.mark_entry(student_id)
                 
                 detected_students.append({
                     "student_id": student_id,
                     "name": name,
-                    "bbox": [int(x), int(y), int(w), int(h)]
+                    "bbox": [int(x), int(y), int(w), int(h)],
+                    "status": "recognized"
+                })
+            else:
+                # Unknown person - Log as suspicious
+                print(f"⚠️  Unknown person detected at position ({x}, {y})")
+                
+                # Save unknown face image for review
+                face_img = frame[int(y):int(y+h), int(x):int(x+w)]
+                unknown_dir = "unknown_faces"
+                os.makedirs(unknown_dir, exist_ok=True)
+                
+                timestamp = datetime.now().timestamp()
+                unknown_path = os.path.join(unknown_dir, f"unknown_{timestamp}.jpg")
+                cv2.imwrite(unknown_path, face_img)
+                
+                # Log suspicious activity
+                db.log_suspicious_activity(
+                    student_id="UNKNOWN",
+                    activity_type="unknown_person",
+                    description=f"Unrecognized person detected. Image saved: {unknown_path}"
+                )
+                
+                unknown_faces.append({
+                    "bbox": [int(x), int(y), int(w), int(h)],
+                    "status": "unknown",
+                    "image_path": unknown_path
                 })
         
         return {
             "success": True,
             "detected_students": detected_students,
-            "face_count": len(faces)
+            "unknown_faces": unknown_faces,
+            "face_count": len(faces),
+            "unknown_count": len(unknown_faces)
         }
     except Exception as e:
         print(f"Recognition error: {e}")
@@ -682,13 +711,14 @@ async def websocket_camera(websocket: WebSocket):
             # Detect and recognize faces
             faces = detect_faces(frame)
             detected_students = []
+            unknown_faces = []
             
             for (x, y, w, h) in faces:
                 # Recognize face
                 student_id, name = recognize_face(frame, (x, y, w, h))
                 
                 if student_id:
-                    # Track student
+                    # Known student - Track and monitor
                     if student_id not in student_trackers:
                         student_trackers[student_id] = StudentTracker(student_id, name)
                         db.mark_entry(student_id)
@@ -709,13 +739,47 @@ async def websocket_camera(websocket: WebSocket):
                         "name": name,
                         "bbox": [x, y, w, h],
                         "suspicious": tracker.is_suspicious(),
-                        "suspicion_score": tracker.suspicion_score
+                        "suspicion_score": tracker.suspicion_score,
+                        "status": "recognized"
                     })
                     
-                    # Draw on frame
+                    # Draw on frame - Green for normal, Red for suspicious
                     color = (0, 0, 255) if tracker.is_suspicious() else (0, 255, 0)
                     cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
                     cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                else:
+                    # Unknown person - Flag as suspicious
+                    unknown_id = f"UNKNOWN_{datetime.now().timestamp()}"
+                    
+                    # Log suspicious activity (throttled to avoid spam)
+                    if unknown_id not in student_trackers:
+                        # Save unknown face image
+                        face_img = frame[y:y+h, x:x+w]
+                        unknown_dir = "unknown_faces"
+                        os.makedirs(unknown_dir, exist_ok=True)
+                        
+                        timestamp = datetime.now().timestamp()
+                        unknown_path = os.path.join(unknown_dir, f"unknown_{timestamp}.jpg")
+                        cv2.imwrite(unknown_path, face_img)
+                        
+                        db.log_suspicious_activity(
+                            student_id="UNKNOWN",
+                            activity_type="unknown_person",
+                            description=f"Unrecognized person detected at {datetime.now().strftime('%H:%M:%S')}. Image: {unknown_path}"
+                        )
+                        
+                        # Create temporary tracker to avoid repeated logging
+                        student_trackers[unknown_id] = StudentTracker(unknown_id, "Unknown Person")
+                    
+                    unknown_faces.append({
+                        "bbox": [x, y, w, h],
+                        "status": "unknown",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    # Draw on frame - Orange/Yellow for unknown
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 165, 255), 2)
+                    cv2.putText(frame, "UNKNOWN", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
             
             # Encode frame
             _, buffer = cv2.imencode('.jpg', frame)
@@ -725,6 +789,8 @@ async def websocket_camera(websocket: WebSocket):
             await websocket.send_json({
                 "frame": frame_base64,
                 "students": detected_students,
+                "unknown_faces": unknown_faces,
+                "unknown_count": len(unknown_faces),
                 "timestamp": datetime.now().isoformat()
             })
             

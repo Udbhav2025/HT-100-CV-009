@@ -215,10 +215,12 @@
             const contentDiv = document.getElementById('resultContent');
 
             if (data.success) {
+                let html = '';
+                
+                // Show recognized students
                 if (data.detected_students && data.detected_students.length > 0) {
                     setStatus(`✅ Found ${data.detected_students.length} student(s)!`, 'success');
                     
-                    let html = '';
                     data.detected_students.forEach(student => {
                         html += `
                             <div class="student-card">
@@ -228,7 +230,29 @@
                             </div>
                         `;
                     });
+                }
+                
+                // Show unknown persons
+                if (data.unknown_faces && data.unknown_faces.length > 0) {
+                    if (data.detected_students && data.detected_students.length > 0) {
+                        setStatus(`⚠️ Found ${data.detected_students.length} student(s) and ${data.unknown_faces.length} unknown person(s)!`, 'info');
+                    } else {
+                        setStatus(`⚠️ Detected ${data.unknown_faces.length} unknown person(s)!`, 'info');
+                    }
                     
+                    data.unknown_faces.forEach((face, index) => {
+                        html += `
+                            <div class="student-card" style="border-left-color: #ff9800;">
+                                <h4 style="color: #ff9800;">⚠️ Unknown Person #${index + 1}</h4>
+                                <p><strong>Status:</strong> Not recognized (logged as suspicious)</p>
+                                <p><strong>Bounding Box:</strong> [${face.bbox.join(', ')}]</p>
+                                <p style="color: #666; font-size: 0.9em;">This person's photo is not in the system.</p>
+                            </div>
+                        `;
+                    });
+                }
+                
+                if (html) {
                     contentDiv.innerHTML = html;
                     resultsDiv.style.display = 'block';
                 } else {
