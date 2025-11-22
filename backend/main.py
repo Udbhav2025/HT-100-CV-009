@@ -1,0 +1,729 @@
+"""
+FastAPI Backend for Smart Classroom Attendance System
+"""
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import datetime, date, timedelta
+import cv2
+import numpy as np
+from deepface import DeepFace
+import os
+import json
+import asyncio
+import base64
+from collections import deque
+import shutil
+
+# Import database and auth
+from database_mongo import AttendanceDatabase
+from auth import (
+    UserManager, UserCreate, UserLogin, Token, User,
+    create_access_token, get_current_user, require_teacher, require_admin,
+    ACCESS_TOKEN_EXPIRE_MINUTES
+)
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Smart Classroom Attendance API",
+    description="AI-powered attendance system with anti-spoofing",
+    version="1.0.0"
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize database and auth
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
+db = AttendanceDatabase(connection_string=MONGODB_URI)
+user_manager = UserManager(db)
+
+# Global variables for camera monitoring
+camera_active = False
+camera = None
+active_websockets = []
+
+# Student tracker for liveness detection
+class StudentTracker:
+    def __init__(self, student_id, name):
+        self.student_id = student_id
+        self.name = name
+        self.movement_history = deque(maxlen=30)
+        self.last_position = None
+        self.suspicion_score = 0
+        self.last_seen = datetime.now()
+        self.entry_logged = False
+    
+    def update_metrics(self, bbox):
+        current_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+        if self.last_position:
+            movement = np.sqrt(
+                (current_center[0] - self.last_position[0])**2 + 
+                (current_center[1] - self.last_position[1])**2
+            )
+            self.movement_history.append(movement)
+        self.last_position = current_center
+        self.last_seen = datetime.now()
+        
+        # Calculate suspicion
+        if len(self.movement_history) >= 20:
+            avg_movement = np.mean(list(self.movement_history))
+            if avg_movement < 2:
+                self.suspicion_score += 1
+            else:
+                self.suspicion_score = max(0, self.suspicion_score - 0.5)
+    
+    def is_suspicious(self):
+        return self.suspicion_score > 10
+
+student_trackers = {}
+
+# ==================== PYDANTIC MODELS ====================
+
+class StudentCreate(BaseModel):
+    student_id: str
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+class StudentUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+class AttendanceEntry(BaseModel):
+    student_id: str
+    entry_time: Optional[datetime] = None
+
+class AttendanceExit(BaseModel):
+    student_id: str
+    exit_time: Optional[datetime] = None
+
+class SuspicionUpdate(BaseModel):
+    student_id: str
+    score: float
+    date: Optional[date] = None
+
+class ActivityResolve(BaseModel):
+    activity_id: str
+
+# ==================== STUDENT ENDPOINTS ====================
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Smart Classroom Attendance API",
+        "version": "1.0.0",
+        "status": "running"
+    }
+
+# ==================== AUTHENTICATION ENDPOINTS ====================
+
+@app.post("/api/auth/register", response_model=dict)
+async def register(user: UserCreate):
+    """Register a new user (admin only in production)"""
+    try:
+        new_user = user_manager.create_user(user)
+        return {
+            "success": True,
+            "message": "User created successfully",
+            "user": new_user
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/login", response_model=Token)
+async def login(user_credentials: UserLogin):
+    """Login user (admin/teacher/student) and return JWT token"""
+    try:
+        # Try admin/teacher login first
+        user = user_manager.authenticate_user(user_credentials.email, user_credentials.password)
+        
+        # If not found, try student login
+        if not user:
+            user = user_manager.authenticate_student(user_credentials.email, user_credentials.password, db)
+        
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Incorrect email or password"
+            )
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user["email"], "role": user.get("role", "student")},
+            expires_delta=access_token_expires
+        )
+        
+        # Remove sensitive data
+        user_data = {
+            "email": user["email"],
+            "name": user["name"],
+            "role": user.get("role", "student"),
+            "is_active": user.get("is_active", True)
+        }
+        
+        # Add student_id if student
+        if user.get("student_id"):
+            user_data["student_id"] = user["student_id"]
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": user_data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/auth/me", response_model=dict)
+async def get_current_user_info(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+    """Get current user information"""
+    return {
+        "success": True,
+        "user": current_user
+    }
+
+@app.get("/api/auth/users")
+async def get_all_users(current_user: dict = Depends(require_admin)):
+    """Get all users (admin only)"""
+    try:
+        users = user_manager.get_all_users()
+        return {"success": True, "data": users}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== STUDENT-SPECIFIC ENDPOINTS ====================
+
+@app.get("/api/student/me")
+async def get_student_profile(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+    """Get current student's profile (student only)"""
+    try:
+        if current_user["role"] != "student":
+            raise HTTPException(status_code=403, detail="Students only")
+        
+        student_id = current_user.get("student_id")
+        if not student_id:
+            raise HTTPException(status_code=404, detail="Student ID not found")
+        
+        student = db.get_student(student_id)
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+        
+        # Get photos
+        photos = db.get_student_photos(student_id)
+        student['photos'] = photos
+        
+        # Get stats
+        stats = db.get_student_stats(student_id)
+        student['stats'] = stats
+        
+        # Remove password
+        student.pop('password', None)
+        
+        return {"success": True, "data": student}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/student/attendance")
+async def get_student_attendance(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+    """Get current student's attendance history (student only)"""
+    try:
+        if current_user["role"] != "student":
+            raise HTTPException(status_code=403, detail="Students only")
+        
+        student_id = current_user.get("student_id")
+        if not student_id:
+            raise HTTPException(status_code=404, detail="Student ID not found")
+        
+        history = db.get_student_attendance_history(student_id, limit=30)
+        return {"success": True, "data": history}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/student/suspicious-activities")
+async def get_student_suspicious_activities(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+    """Get current student's suspicious activities (student only)"""
+    try:
+        if current_user["role"] != "student":
+            raise HTTPException(status_code=403, detail="Students only")
+        
+        student_id = current_user.get("student_id")
+        if not student_id:
+            raise HTTPException(status_code=404, detail="Student ID not found")
+        
+        activities = db.get_student_suspicious_activities(student_id)
+        return {"success": True, "data": activities}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/students")
+async def get_all_students(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+    """Get all registered students (requires authentication)"""
+    try:
+        students = db.get_all_students()
+        return {"success": True, "data": students}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/students/{student_id}")
+async def get_student(student_id: str):
+    """Get specific student details"""
+    try:
+        student = db.get_student(student_id)
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+        
+        # Get photos
+        photos = db.get_student_photos(student_id)
+        student['photos'] = photos
+        
+        # Get stats
+        stats = db.get_student_stats(student_id)
+        student['stats'] = stats
+        
+        return {"success": True, "data": student}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/students")
+async def create_student(student: StudentCreate, current_user: dict = Depends(require_teacher)):
+    """Create a new student (requires teacher role)"""
+    try:
+        success = db.add_student(
+            student.student_id,
+            student.name,
+            student.email,
+            student.phone
+        )
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Student already exists")
+        
+        return {"success": True, "message": "Student created successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/students/{student_id}")
+async def update_student(student_id: str, student: StudentUpdate):
+    """Update student details"""
+    try:
+        success = db.update_student(
+            student_id,
+            student.name,
+            student.email,
+            student.phone
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Student not found")
+        
+        return {"success": True, "message": "Student updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/students/{student_id}")
+async def delete_student(student_id: str):
+    """Delete a student"""
+    try:
+        success = db.delete_student(student_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Student not found")
+        
+        return {"success": True, "message": "Student deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== PHOTO ENDPOINTS ====================
+
+@app.post("/api/students/{student_id}/photos")
+async def upload_student_photo(
+    student_id: str,
+    file: UploadFile = File(...),
+    photo_type: str = Form(...),
+    description: Optional[str] = Form(None)
+):
+    """Upload a photo for a student"""
+    try:
+        # Check if student exists
+        student = db.get_student(student_id)
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+        
+        # Create student directory
+        student_dir = os.path.join("photos", "students", student_id)
+        os.makedirs(student_dir, exist_ok=True)
+        
+        # Save file
+        ext = os.path.splitext(file.filename)[1]
+        filename = f"{student_id}_{photo_type}_{datetime.now().timestamp()}{ext}"
+        file_path = os.path.join(student_dir, filename)
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Add to database
+        photo_id = db.add_student_photo(student_id, file_path, photo_type, description)
+        
+        return {
+            "success": True,
+            "message": "Photo uploaded successfully",
+            "photo_id": photo_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/students/{student_id}/photos")
+async def get_student_photos(student_id: str):
+    """Get all photos for a student"""
+    try:
+        photos = db.get_student_photos(student_id)
+        return {"success": True, "data": photos}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/photos/{photo_id}")
+async def delete_photo(photo_id: str):
+    """Delete a photo"""
+    try:
+        success = db.delete_photo(photo_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        
+        return {"success": True, "message": "Photo deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== ATTENDANCE ENDPOINTS ====================
+
+@app.get("/api/attendance/today")
+async def get_today_attendance():
+    """Get today's attendance"""
+    try:
+        attendance = db.get_today_attendance()
+        return {"success": True, "data": attendance}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/attendance/date/{date}")
+async def get_attendance_by_date(date: str):
+    """Get attendance for a specific date (YYYY-MM-DD)"""
+    try:
+        date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+        attendance = db.get_attendance_by_date(date_obj)
+        return {"success": True, "data": attendance}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/attendance/range")
+async def get_attendance_by_range(start_date: str, end_date: str):
+    """Get attendance for a date range"""
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        attendance = db.get_attendance_by_date_range(start, end)
+        return {"success": True, "data": attendance}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/attendance/student/{student_id}")
+async def get_student_attendance(student_id: str, limit: int = 30):
+    """Get attendance history for a student"""
+    try:
+        history = db.get_student_attendance_history(student_id, limit)
+        return {"success": True, "data": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/attendance/entry")
+async def mark_entry(entry: AttendanceEntry):
+    """Mark student entry"""
+    try:
+        db.mark_entry(entry.student_id, entry.entry_time)
+        return {"success": True, "message": "Entry marked successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/attendance/exit")
+async def mark_exit(exit: AttendanceExit):
+    """Mark student exit"""
+    try:
+        db.mark_exit(exit.student_id, exit.exit_time)
+        return {"success": True, "message": "Exit marked successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/attendance/suspicion")
+async def update_suspicion(suspicion: SuspicionUpdate):
+    """Update suspicion score"""
+    try:
+        db.update_suspicion_score(suspicion.student_id, suspicion.score, suspicion.date)
+        return {"success": True, "message": "Suspicion score updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== SUSPICIOUS ACTIVITY ENDPOINTS ====================
+
+@app.get("/api/suspicious")
+async def get_suspicious_activities(resolved: bool = False, limit: int = 50):
+    """Get suspicious activities"""
+    try:
+        activities = db.get_suspicious_activities(resolved, limit)
+        return {"success": True, "data": activities}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/suspicious/resolve")
+async def resolve_activity(resolve: ActivityResolve):
+    """Resolve a suspicious activity"""
+    try:
+        success = db.resolve_suspicious_activity(resolve.activity_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        
+        return {"success": True, "message": "Activity resolved"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== STATISTICS ENDPOINTS ====================
+
+@app.get("/api/stats")
+async def get_statistics(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    """Get attendance statistics"""
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+        end = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+        
+        stats = db.get_attendance_stats(start, end)
+        return {"success": True, "data": stats}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stats/student/{student_id}")
+async def get_student_statistics(student_id: str):
+    """Get statistics for a specific student"""
+    try:
+        stats = db.get_student_stats(student_id)
+        return {"success": True, "data": stats}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== CAMERA/MONITORING ENDPOINTS ====================
+
+@app.get("/api/camera/status")
+async def get_camera_status():
+    """Get camera monitoring status"""
+    return {
+        "success": True,
+        "data": {
+            "active": camera_active,
+            "connected_clients": len(active_websockets)
+        }
+    }
+
+@app.post("/api/camera/start")
+async def start_camera():
+    """Start camera monitoring"""
+    global camera_active, camera
+    
+    if camera_active:
+        return {"success": True, "message": "Camera already active"}
+    
+    try:
+        camera = cv2.VideoCapture(0)
+        if not camera.isOpened():
+            raise HTTPException(status_code=500, detail="Failed to open camera")
+        
+        camera_active = True
+        return {"success": True, "message": "Camera started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/camera/stop")
+async def stop_camera():
+    """Stop camera monitoring"""
+    global camera_active, camera
+    
+    if not camera_active:
+        return {"success": True, "message": "Camera already stopped"}
+    
+    camera_active = False
+    if camera:
+        camera.release()
+        camera = None
+    
+    return {"success": True, "message": "Camera stopped"}
+
+@app.websocket("/ws/camera")
+async def websocket_camera(websocket: WebSocket):
+    """WebSocket endpoint for real-time camera feed"""
+    await websocket.accept()
+    active_websockets.append(websocket)
+    
+    try:
+        while camera_active and camera:
+            ret, frame = camera.read()
+            if not ret:
+                break
+            
+            frame = cv2.flip(frame, 1)
+            
+            # Detect and recognize faces
+            faces = detect_faces(frame)
+            detected_students = []
+            
+            for (x, y, w, h) in faces:
+                # Recognize face
+                student_id, name = recognize_face(frame, (x, y, w, h))
+                
+                if student_id:
+                    # Track student
+                    if student_id not in student_trackers:
+                        student_trackers[student_id] = StudentTracker(student_id, name)
+                        db.mark_entry(student_id)
+                    
+                    tracker = student_trackers[student_id]
+                    tracker.update_metrics((x, y, x+w, y+h))
+                    
+                    # Check for suspicious behavior
+                    if tracker.is_suspicious():
+                        db.log_suspicious_activity(
+                            student_id,
+                            "static_behavior",
+                            "No movement detected for extended period"
+                        )
+                    
+                    detected_students.append({
+                        "student_id": student_id,
+                        "name": name,
+                        "bbox": [x, y, w, h],
+                        "suspicious": tracker.is_suspicious(),
+                        "suspicion_score": tracker.suspicion_score
+                    })
+                    
+                    # Draw on frame
+                    color = (0, 0, 255) if tracker.is_suspicious() else (0, 255, 0)
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+                    cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            
+            # Encode frame
+            _, buffer = cv2.imencode('.jpg', frame)
+            frame_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+            # Send data
+            await websocket.send_json({
+                "frame": frame_base64,
+                "students": detected_students,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            await asyncio.sleep(0.033)  # ~30 FPS
+    
+    except WebSocketDisconnect:
+        active_websockets.remove(websocket)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        active_websockets.remove(websocket)
+
+# ==================== HELPER FUNCTIONS ====================
+
+def detect_faces(frame):
+    """Detect faces using OpenCV"""
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    return faces
+
+def recognize_face(frame, bbox):
+    """Recognize face in bounding box"""
+    try:
+        x, y, w, h = bbox
+        face_img = frame[y:y+h, x:x+w]
+        
+        temp_path = f"temp_face_{datetime.now().timestamp()}.jpg"
+        cv2.imwrite(temp_path, face_img)
+        
+        all_photos = db.get_all_student_photos()
+        if not all_photos:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return None, None
+        
+        temp_db = "temp_db"
+        os.makedirs(temp_db, exist_ok=True)
+        
+        for photo in all_photos:
+            if os.path.exists(photo['photo_path']):
+                dest = os.path.join(temp_db, os.path.basename(photo['photo_path']))
+                shutil.copy2(photo['photo_path'], dest)
+        
+        result = DeepFace.find(
+            img_path=temp_path,
+            db_path=temp_db,
+            model_name="VGG-Face",
+            enforce_detection=False,
+            silent=True
+        )
+        
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        if os.path.exists(temp_db):
+            shutil.rmtree(temp_db)
+        
+        if len(result) > 0 and len(result[0]) > 0:
+            matched_path = result[0]['identity'].iloc[0]
+            student_id = os.path.basename(matched_path).split('_')[0]
+            student = db.get_student(student_id)
+            if student:
+                return student_id, student['name']
+        
+        return None, None
+    except Exception as e:
+        print(f"Recognition error: {e}")
+        return None, None
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: classroom_mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: classroom_attendance
+    networks:
+      - classroom_network
+
+  backend:
+    build: .
+    container_name: classroom_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URI: mongodb://admin:password123@mongodb:27017/
+      JWT_SECRET_KEY: my-super-secret-jwt-key-change-in-production
+    depends_on:
+      - mongodb
+    volumes:
+      - ./photos:/app/photos
+    networks:
+      - classroom_network
+
+volumes:
+  mongodb_data:
+
+networks:
+  classroom_network:
+    driver: bridge

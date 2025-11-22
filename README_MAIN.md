@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 🎓 Smart Classroom Attendance System
 
 > AI-powered attendance system with real-time face recognition and anti-spoofing detection
@@ -24,19 +23,19 @@
 - **Suspicious Activity Log**: Track and resolve spoofing attempts
 
 ### 🔐 Security
-- **JWT Authentication**: Secure login with role-based access control
 - **Movement Detection**: Monitors natural head movements
 - **Liveness Scoring**: Calculates suspicion scores based on behavior
+- **Challenge System**: Issues verification challenges to suspicious students
 - **Activity Logging**: Complete audit trail of all suspicious activities
 
 ## 🏗️ Architecture
 
 ```
-Frontend (React) ←→ Backend API (FastAPI) ←→ Database (MongoDB)
-                          ↓
-                  Face Recognition (DeepFace)
-                          ↓
-                  Camera Feed (OpenCV)
+Frontend (React/Lovable) ←→ Backend API (FastAPI) ←→ Database (MongoDB)
+                                    ↓
+                            Face Recognition (DeepFace)
+                                    ↓
+                            Camera Feed (OpenCV)
 ```
 
 ## 📁 Project Structure
@@ -45,17 +44,19 @@ Frontend (React) ←→ Backend API (FastAPI) ←→ Database (MongoDB)
 smart-classroom-attendance/
 ├── backend/                    # FastAPI REST API
 │   ├── main.py                # Main application
-│   ├── auth.py                # Authentication module
-│   ├── requirements.txt       # Python dependencies
-│   ├── Dockerfile            # Docker configuration
-│   └── docker-compose.yml    # Multi-container setup
-│
-├── frontend/                  # React frontend (separate repo)
+│   ├── requirements.txt       # Dependencies
+│   └── README.md             # Backend docs
 │
 ├── database_mongo.py          # MongoDB database module
 ├── setup_database_mongo.py    # Database setup script
-├── .gitignore                # Git ignore rules
-└── README.md                 # This file
+│
+├── photos/                    # Student photos storage
+│   └── students/
+│
+├── lovable_prompt.md          # Frontend generation prompt
+├── QUICK_START.md            # Quick setup guide
+├── PROJECT_STRUCTURE.md      # Detailed documentation
+└── README_MAIN.md            # This file
 ```
 
 ## 🚀 Quick Start
@@ -63,26 +64,24 @@ smart-classroom-attendance/
 ### Prerequisites
 - Python 3.9+
 - MongoDB (local or Atlas)
-- Docker (optional)
+- Webcam
 - Node.js 16+ (for frontend)
 
-### 1. Clone Repository
+### 1. Install MongoDB
 
+**Local:**
 ```bash
-git clone <your-repo-url>
-cd smart-classroom-attendance
+# Windows: Download from mongodb.com
+# Mac: brew install mongodb-community
+# Linux: sudo apt-get install mongodb
 ```
+
+**Cloud (MongoDB Atlas):**
+- Sign up at https://www.mongodb.com/cloud/atlas
+- Create free cluster
+- Get connection string
 
 ### 2. Setup Backend
-
-#### Option A: Using Docker (Recommended)
-
-```bash
-cd backend
-docker-compose up -d
-```
-
-#### Option B: Local Setup
 
 ```bash
 cd backend
@@ -92,20 +91,22 @@ cp .env.example .env
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 3. Create Admin User
+Backend: `http://localhost:8000`
+API Docs: `http://localhost:8000/docs`
 
-```bash
-cd backend
-python create_admin.py
-```
-
-### 4. Add Students
+### 3. Add Students
 
 ```bash
 python setup_database_mongo.py
+# Follow interactive prompts to add students and photos
 ```
 
-### 5. Setup Frontend
+### 4. Generate Frontend
+
+1. Go to https://lovable.dev
+2. Copy content from `lovable_prompt.md`
+3. Paste and generate
+4. Download and run:
 
 ```bash
 cd frontend
@@ -113,77 +114,43 @@ npm install
 npm run dev
 ```
 
-## 🌐 Access Application
+Frontend: `http://localhost:5173`
 
-- **Frontend**: http://localhost:8080
-- **Backend API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
+## 📚 Documentation
 
-## 📚 API Documentation
+- **Quick Start**: [`QUICK_START.md`](QUICK_START.md) - Get running in 10 minutes
+- **Full Documentation**: [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md) - Complete guide
+- **Backend API**: [`backend/README.md`](backend/README.md) - API documentation
+- **Frontend Prompt**: [`lovable_prompt.md`](lovable_prompt.md) - Lovable generation prompt
 
-### Authentication Endpoints
+## 🔌 API Overview
 
-```
-POST /api/auth/register    # Register new user
-POST /api/auth/login       # Login and get JWT token
-GET  /api/auth/me          # Get current user info
-```
-
-### Student Management
+### REST Endpoints
 
 ```
-GET    /api/students              # Get all students
-POST   /api/students              # Create student
-GET    /api/students/{id}         # Get student details
-PUT    /api/students/{id}         # Update student
-DELETE /api/students/{id}         # Delete student
-POST   /api/students/{id}/photos  # Upload photo
+Students:     GET/POST/PUT/DELETE  /api/students
+Photos:       POST/GET/DELETE      /api/students/{id}/photos
+Attendance:   GET/POST/PUT         /api/attendance/*
+Suspicious:   GET/POST             /api/suspicious
+Statistics:   GET                  /api/stats
+Camera:       POST/GET             /api/camera/*
 ```
 
-### Attendance
+### WebSocket
 
-```
-GET  /api/attendance/today        # Today's attendance
-GET  /api/attendance/date/{date}  # Attendance by date
-POST /api/attendance/entry        # Mark entry
-POST /api/attendance/exit         # Mark exit
-```
-
-### Real-time Monitoring
-
-```
-WS /ws/camera  # WebSocket for live camera feed
+```javascript
+// Real-time camera feed
+const ws = new WebSocket('ws://localhost:8000/ws/camera');
+ws.onmessage = (event) => {
+  const { frame, students, timestamp } = JSON.parse(event.data);
+  // frame: Base64 encoded image
+  // students: Array of detected students with bounding boxes
+};
 ```
 
-## 🔧 Configuration
+## 💡 How It Works
 
-### Environment Variables
-
-Create `backend/.env`:
-
-```env
-# MongoDB
-MONGODB_URI=mongodb://admin:password123@localhost:27017/
-
-# JWT
-JWT_SECRET_KEY=your-super-secret-key
-
-# API
-API_HOST=0.0.0.0
-API_PORT=8000
-```
-
-### Frontend Configuration
-
-Update `frontend/src/config.ts`:
-
-```typescript
-export const API_URL = "http://localhost:8000";
-```
-
-## 🎯 How It Works
-
-### Attendance Flow
+### Face Recognition Flow
 
 1. **Camera captures frame** → OpenCV processes image
 2. **Face detection** → Haar Cascade detects faces
@@ -206,6 +173,14 @@ Movement Tracking → Variance Calculation → Suspicion Score
                                     Verify or Flag
 ```
 
+## 🎯 Use Cases
+
+- **Schools & Colleges**: Automated classroom attendance
+- **Training Centers**: Track participant presence
+- **Exam Halls**: Monitor test-takers
+- **Corporate**: Meeting room attendance
+- **Events**: Track attendee presence
+
 ## 🛠️ Technology Stack
 
 ### Backend
@@ -213,42 +188,43 @@ Movement Tracking → Variance Calculation → Suspicion Score
 - **OpenCV**: Computer vision and face detection
 - **DeepFace**: Face recognition (VGG-Face model)
 - **PyMongo**: MongoDB driver
-- **JWT**: Authentication
 - **WebSockets**: Real-time communication
 
-### Frontend
+### Database
+- **MongoDB**: NoSQL database for flexible schema
+- **Collections**: students, student_photos, attendance, suspicious_activity
+
+### Frontend (Generated by Lovable)
 - **React**: UI framework
 - **TypeScript**: Type-safe JavaScript
 - **Tailwind CSS**: Utility-first styling
 - **Shadcn/UI**: Component library
 
-### Database
-- **MongoDB**: NoSQL database
-- Collections: students, student_photos, attendance, suspicious_activity, users
-
 ## 📊 Database Schema
 
-### Students Collection
+### Students
 ```json
 {
   "student_id": "STU001",
   "name": "John Doe",
   "email": "john@example.com",
-  "phone": "+1234567890"
+  "phone": "+1234567890",
+  "created_at": "2024-01-20T10:00:00Z"
 }
 ```
 
-### Student Photos Collection
+### Student Photos
 ```json
 {
   "student_id": "STU001",
   "photo_path": "/photos/students/STU001/front.jpg",
   "photo_type": "front",
-  "description": "Front facing photo"
+  "description": "Front facing photo",
+  "created_at": "2024-01-20T10:00:00Z"
 }
 ```
 
-### Attendance Collection
+### Attendance
 ```json
 {
   "student_id": "STU001",
@@ -260,61 +236,55 @@ Movement Tracking → Variance Calculation → Suspicion Score
 }
 ```
 
+## 🔐 Security Best Practices
+
+- [ ] Use environment variables for sensitive data
+- [ ] Implement authentication (JWT)
+- [ ] Enable MongoDB authentication
+- [ ] Use HTTPS in production
+- [ ] Implement rate limiting
+- [ ] Validate all inputs
+- [ ] Regular security audits
+
 ## 🐛 Troubleshooting
 
 ### MongoDB Connection Failed
 ```bash
 # Check if MongoDB is running
-docker ps
-
-# Start MongoDB
-cd backend
-docker-compose up -d mongodb
+mongo --version
+# Start MongoDB service
 ```
 
 ### Camera Not Working
-- Check camera permissions
-- Try different camera index in code
-- Ensure no other app is using camera
+```bash
+# Try different camera index
+# In backend/main.py: cv2.VideoCapture(1)
+```
 
 ### Face Not Recognized
-- Add multiple photos per student (3-5)
+- Add multiple photos per student
 - Ensure good lighting
 - Use clear, front-facing photos
 
 ## 🚀 Deployment
 
 ### Backend (Docker)
-```bash
-cd backend
-docker-compose up -d
+```dockerfile
+FROM python:3.9-slim
+WORKDIR /app
+COPY backend/requirements.txt .
+RUN pip install -r requirements.txt
+COPY backend/ .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 ### Frontend (Vercel/Netlify)
 ```bash
-cd frontend
 npm run build
 # Deploy dist/ folder
 ```
 
-### Database (MongoDB Atlas)
-- Use MongoDB Atlas for production
-- Update connection string in `.env`
-
-## 🔐 Security Best Practices
-
-- ✅ Use environment variables for secrets
-- ✅ Enable MongoDB authentication
-- ✅ Use HTTPS in production
-- ✅ Implement rate limiting
-- ✅ Validate all inputs
-- ✅ Regular security audits
-
-## 📝 License
-
-This project is for educational purposes.
-
-## 👥 Contributing
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create feature branch (`git checkout -b feature/AmazingFeature`)
@@ -322,23 +292,30 @@ This project is for educational purposes.
 4. Push to branch (`git push origin feature/AmazingFeature`)
 5. Open Pull Request
 
+## 📝 License
+
+This project is for educational purposes.
+
+## 👥 Authors
+
+Built for hackathon/educational purposes
+
 ## 🙏 Acknowledgments
 
 - **DeepFace**: Face recognition library
 - **FastAPI**: Modern Python web framework
 - **MongoDB**: Flexible NoSQL database
 - **OpenCV**: Computer vision library
+- **Lovable**: Frontend generation platform
 
 ## 📞 Support
 
-For issues or questions:
-- Check documentation
-- Review API docs at `/docs`
-- Open an issue on GitHub
+- **Documentation**: See `QUICK_START.md` and `PROJECT_STRUCTURE.md`
+- **API Docs**: `http://localhost:8000/docs`
+- **Issues**: Check troubleshooting section
 
 ---
 
-**Made with ❤️ for smart classrooms**
-=======
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/wLMKZac9)
->>>>>>> f2bcb9110fe75bedd1dfd2eb8916027b31bd07da
+**⭐ Star this repo if you find it useful!**
+
+Made with ❤️ for smart classrooms
