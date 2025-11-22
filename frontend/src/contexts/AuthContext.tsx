@@ -45,8 +45,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         // Store token
         localStorage.setItem("auth_token", loginResponse.access_token);
         
-        // Fetch user role from backend and verify it matches selected role
-        const backendRole = await apiService.getUserRole(loginResponse.user.id);
+        // Get user role from login response
+        const backendRole = loginResponse.user.role;
         
         // Verify the user has the role they selected
         if (backendRole !== selectedRole) {
@@ -54,11 +54,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
         
         const userData: User = {
-          id: loginResponse.user.id,
+          id: loginResponse.user.email, // Use email as ID since backend doesn't return _id in login
           email: loginResponse.user.email,
           name: loginResponse.user.name,
-          role: selectedRole,
-          ...(selectedRole === "student" && { studentId: loginResponse.user.id }),
+          role: backendRole,
+          ...(selectedRole === "student" && loginResponse.user.student_id && { studentId: loginResponse.user.student_id }),
         };
         
         localStorage.setItem("user_data", JSON.stringify(userData));

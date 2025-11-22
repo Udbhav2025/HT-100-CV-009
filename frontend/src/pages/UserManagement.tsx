@@ -66,12 +66,19 @@ const UserManagement = () => {
   const loadUsers = async () => {
     try {
       setLoading(true);
+      console.log('Loading users...');
       const response = await apiService.getAllUsers();
-      setUsers(response.data || response);
-    } catch (error) {
+      console.log('Users response:', response);
+      
+      const usersList = response.data || response;
+      console.log('Users list:', usersList);
+      
+      setUsers(Array.isArray(usersList) ? usersList : []);
+    } catch (error: any) {
+      console.error('Load users error:', error);
       toast({
         title: "Error",
-        description: "Failed to load users",
+        description: error.message || "Failed to load users",
         variant: "destructive",
       });
     } finally {
@@ -88,21 +95,21 @@ const UserManagement = () => {
         formData.role
       );
       
-      // Refresh user list
-      const updatedUsers = await apiService.getAllUsers();
-      setUsers(updatedUsers.data || updatedUsers);
+      toast({
+        title: "Teacher added successfully",
+        description: `${formData.name} has been added as a teacher`,
+      });
       
       setIsAddDialogOpen(false);
-      setFormData({ name: "", email: "", password: "", role: "student" });
+      setFormData({ name: "", email: "", password: "", role: "teacher" });
       
-      toast({
-        title: "User added successfully",
-        description: `${formData.name} has been added as ${formData.role}`,
-      });
+      // Refresh user list
+      await loadUsers();
+      
     } catch (error: any) {
       toast({
         title: "Error",
-        description: error.message || "Failed to add user. Please try again.",
+        description: error.message || "Failed to add teacher. Please try again.",
         variant: "destructive",
       });
     }
@@ -114,17 +121,17 @@ const UserManagement = () => {
     try {
       await apiService.updateUserRole(selectedUser._id, formData.role);
       
-      // Refresh user list
-      const updatedUsers = await apiService.getAllUsers();
-      setUsers(updatedUsers.data || updatedUsers);
-
-      setIsEditDialogOpen(false);
-      setSelectedUser(null);
-      
       toast({
         title: "User updated successfully",
         description: `Role changed to ${formData.role}`,
       });
+
+      setIsEditDialogOpen(false);
+      setSelectedUser(null);
+      
+      // Refresh user list
+      await loadUsers();
+      
     } catch (error: any) {
       toast({
         title: "Error",
@@ -145,17 +152,17 @@ const UserManagement = () => {
     try {
       await apiService.deleteUser(userToDelete._id);
       
-      // Refresh user list
-      const updatedUsers = await apiService.getAllUsers();
-      setUsers(updatedUsers);
-      
-      setIsDeleteDialogOpen(false);
-      setUserToDelete(null);
-      
       toast({
         title: "User deleted",
         description: `${userToDelete.name} has been removed from the system`,
       });
+      
+      setIsDeleteDialogOpen(false);
+      setUserToDelete(null);
+      
+      // Refresh user list
+      await loadUsers();
+      
     } catch (error: any) {
       toast({
         title: "Error",
@@ -220,7 +227,20 @@ const UserManagement = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {users.map((user) => (
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-8">
+                    Loading users...
+                  </TableCell>
+                </TableRow>
+              ) : users.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                    No users found. Add a teacher to get started.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                users.map((user) => (
                 <TableRow key={user._id}>
                   <TableCell className="font-medium">{user.name}</TableCell>
                   <TableCell>
@@ -257,7 +277,8 @@ const UserManagement = () => {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                ))
+              )}
             </TableBody>
           </Table>
         </Card>

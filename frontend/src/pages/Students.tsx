@@ -27,6 +27,7 @@ const Students = () => {
   const [loading, setLoading] = useState(true);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showViewDialog, setShowViewDialog] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newStudent, setNewStudent] = useState({
     student_id: "",
@@ -243,7 +244,10 @@ const Students = () => {
                         📸 Student Photos (Optional)
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        Upload multiple photos for better face recognition accuracy
+                        Upload at least 1 photo for face recognition. More photos (up to 5) improve accuracy.
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        💡 Tip: Different angles and lighting conditions help the system recognize students better
                       </p>
                     </div>
                     <StudentPhotoUploader 
@@ -361,8 +365,8 @@ const Students = () => {
                           size="sm" 
                           className="flex-1"
                           onClick={() => {
-                            // View student details
-                            toast.info("View details coming soon");
+                            setSelectedStudent(student);
+                            setShowViewDialog(true);
                           }}
                         >
                           View
@@ -385,6 +389,93 @@ const Students = () => {
               </Card>
             ))}
           </div>
+        )}
+
+        {/* View Student Dialog */}
+        {selectedStudent && (
+          <Dialog open={showViewDialog} onOpenChange={setShowViewDialog}>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Student Details</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-6">
+                {/* Student Info */}
+                <div className="flex items-center gap-4">
+                  <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center">
+                    <User className="w-10 h-10 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-bold">{selectedStudent.name}</h3>
+                    <Badge variant="secondary">{selectedStudent.student_id}</Badge>
+                  </div>
+                </div>
+
+                {/* Contact Information */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Email</Label>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Mail className="w-4 h-4 text-muted-foreground" />
+                      <span>{selectedStudent.email || 'Not provided'}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Phone</Label>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Phone className="w-4 h-4 text-muted-foreground" />
+                      <span>{selectedStudent.phone || 'Not provided'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Photos */}
+                <div>
+                  <Label className="text-sm font-medium text-muted-foreground mb-2 block">
+                    Photos ({selectedStudent.photoCount || 0})
+                  </Label>
+                  <div className="flex items-center gap-2 p-4 border rounded-lg">
+                    <Image className="w-5 h-5 text-muted-foreground" />
+                    <span className="text-sm">
+                      {selectedStudent.photoCount || 0} photo(s) uploaded for face recognition
+                    </span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-4 border-t">
+                  {canEdit && (
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" className="flex-1">
+                          <UploadIcon className="w-4 h-4 mr-2" />
+                          Upload Photos
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                          <DialogTitle>Upload Photos for {selectedStudent.name}</DialogTitle>
+                        </DialogHeader>
+                        <PhotoUpload 
+                          studentId={selectedStudent.student_id}
+                          onUploadSuccess={() => {
+                            handlePhotoUploadSuccess();
+                            setShowViewDialog(false);
+                          }}
+                        />
+                      </DialogContent>
+                    </Dialog>
+                  )}
+                  <Button 
+                    variant="outline" 
+                    className="flex-1"
+                    onClick={() => setShowViewDialog(false)}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         )}
       </div>
     </DashboardLayout>

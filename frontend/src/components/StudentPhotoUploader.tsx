@@ -211,7 +211,19 @@ export function StudentPhotoUploader({ onPhotosChange }: StudentPhotoUploaderPro
 
       {photos.length === 0 && (
         <p className="text-xs text-center text-muted-foreground">
-          No photos uploaded yet. You can add photos now or later.
+          No photos uploaded yet. Add at least 1 photo for face recognition (or add later).
+        </p>
+      )}
+      
+      {photos.length > 0 && photos.length < 5 && (
+        <p className="text-xs text-center text-success">
+          ✓ {photos.length} photo(s) uploaded. You can add more for better accuracy (recommended: 5 total).
+        </p>
+      )}
+      
+      {photos.length >= 5 && (
+        <p className="text-xs text-center text-success font-medium">
+          ✓ Excellent! {photos.length} photos uploaded for optimal recognition accuracy.
         </p>
       )}
     </div>

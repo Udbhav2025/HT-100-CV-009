@@ -23,7 +23,8 @@ import shutil
 from database_mongo import AttendanceDatabase
 from auth import (
     UserManager, UserCreate, UserLogin, Token, User,
-    create_access_token, get_current_user, require_teacher, require_admin,
+    create_access_token, get_current_user, get_current_user_with_manager,
+    require_teacher, require_admin,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
 
@@ -191,7 +192,7 @@ async def login(user_credentials: UserLogin):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/auth/me", response_model=dict)
-async def get_current_user_info(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+async def get_current_user_info(current_user: dict = Depends(get_current_user_with_manager(user_manager))):
     """Get current user information"""
     return {
         "success": True,
@@ -235,7 +236,7 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_admin(u
 # ==================== STUDENT-SPECIFIC ENDPOINTS ====================
 
 @app.get("/api/student/me")
-async def get_student_profile(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+async def get_student_profile(current_user: dict = Depends(get_current_user_with_manager(user_manager))):
     """Get current student's profile (student only)"""
     try:
         if current_user["role"] != "student":
@@ -267,7 +268,7 @@ async def get_student_profile(current_user: dict = Depends(lambda: get_current_u
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/student/attendance")
-async def get_student_attendance(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+async def get_student_attendance(current_user: dict = Depends(get_current_user_with_manager(user_manager))):
     """Get current student's attendance history (student only)"""
     try:
         if current_user["role"] != "student":
@@ -285,7 +286,7 @@ async def get_student_attendance(current_user: dict = Depends(lambda: get_curren
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/student/suspicious-activities")
-async def get_student_suspicious_activities(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+async def get_student_suspicious_activities(current_user: dict = Depends(get_current_user_with_manager(user_manager))):
     """Get current student's suspicious activities (student only)"""
     try:
         if current_user["role"] != "student":
@@ -303,7 +304,7 @@ async def get_student_suspicious_activities(current_user: dict = Depends(lambda:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/students")
-async def get_all_students(current_user: dict = Depends(lambda: get_current_user(user_manager=user_manager))):
+async def get_all_students(current_user: dict = Depends(get_current_user_with_manager(user_manager))):
     """Get all registered students (requires authentication)"""
     try:
         students = db.get_all_students()
@@ -622,6 +623,48 @@ async def stop_camera():
     
     return {"success": True, "message": "Camera stopped"}
 
+@app.post("/api/camera/recognize")
+async def recognize_from_frame(file: UploadFile = File(...)):
+    """Recognize faces from uploaded frame"""
+    try:
+        # Read uploaded image
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Invalid image")
+        
+        # Detect faces
+        faces = detect_faces(frame)
+        print(f"Detected {len(faces)} face(s) in frame")
+        detected_students = []
+        
+        for (x, y, w, h) in faces:
+            # Recognize face
+            student_id, name = recognize_face(frame, (int(x), int(y), int(w), int(h)))
+            
+            if student_id:
+                # Mark attendance
+                db.mark_entry(student_id)
+                
+                detected_students.append({
+                    "student_id": student_id,
+                    "name": name,
+                    "bbox": [int(x), int(y), int(w), int(h)]
+                })
+        
+        return {
+            "success": True,
+            "detected_students": detected_students,
+            "face_count": len(faces)
+        }
+    except Exception as e:
+        print(f"Recognition error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.websocket("/ws/camera")
 async def websocket_camera(websocket: WebSocket):
     """WebSocket endpoint for real-time camera feed"""
@@ -704,50 +747,115 @@ def detect_faces(frame):
 
 def recognize_face(frame, bbox):
     """Recognize face in bounding box"""
+    temp_path = None
+    temp_db = None
+    
     try:
         x, y, w, h = bbox
         face_img = frame[y:y+h, x:x+w]
         
+        # Save temp face image
         temp_path = f"temp_face_{datetime.now().timestamp()}.jpg"
         cv2.imwrite(temp_path, face_img)
+        print(f"Saved temp face image: {temp_path}")
         
+        # Get all student photos
         all_photos = db.get_all_student_photos()
+        print(f"Found {len(all_photos)} photos in database")
+        
         if not all_photos:
+            print("No photos in database to match against")
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return None, None
         
-        temp_db = "temp_db"
+        # Create temp database with student photos
+        temp_db = f"temp_db_{datetime.now().timestamp()}"
         os.makedirs(temp_db, exist_ok=True)
         
+        photo_count = 0
         for photo in all_photos:
             if os.path.exists(photo['photo_path']):
-                dest = os.path.join(temp_db, os.path.basename(photo['photo_path']))
+                # Use student_id in filename for easier matching
+                dest = os.path.join(temp_db, f"{photo['student_id']}_{os.path.basename(photo['photo_path'])}")
                 shutil.copy2(photo['photo_path'], dest)
+                photo_count += 1
         
+        print(f"Copied {photo_count} photos to temp database")
+        
+        if photo_count == 0:
+            print("No valid photo files found")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            if os.path.exists(temp_db):
+                shutil.rmtree(temp_db)
+            return None, None
+        
+        # Perform face recognition
+        print("Running DeepFace.find...")
         result = DeepFace.find(
             img_path=temp_path,
             db_path=temp_db,
             model_name="VGG-Face",
             enforce_detection=False,
-            silent=True
+            silent=True,
+            distance_metric="cosine"
         )
         
+        print(f"DeepFace result: {len(result)} dataframes")
+        
+        # Cleanup temp files
         if os.path.exists(temp_path):
             os.remove(temp_path)
         if os.path.exists(temp_db):
             shutil.rmtree(temp_db)
         
+        # Process results
         if len(result) > 0 and len(result[0]) > 0:
-            matched_path = result[0]['identity'].iloc[0]
-            student_id = os.path.basename(matched_path).split('_')[0]
+            # Get the best match (first row)
+            best_match = result[0].iloc[0]
+            matched_path = best_match['identity']
+            distance = best_match.get('VGG-Face_cosine', 1.0)
+            
+            print(f"Match found: {matched_path}, distance: {distance}")
+            
+            # Check if distance is within acceptable threshold
+            # Lower distance = better match. Typical threshold: 0.4-0.6
+            RECOGNITION_THRESHOLD = 0.6
+            
+            if distance > RECOGNITION_THRESHOLD:
+                print(f"Distance {distance} exceeds threshold {RECOGNITION_THRESHOLD}, no match")
+                return None, None
+            
+            # Extract student ID from filename
+            filename = os.path.basename(matched_path)
+            student_id = filename.split('_')[0]
+            
+            print(f"Extracted student ID: {student_id}")
+            
+            # Get student details
             student = db.get_student(student_id)
             if student:
+                print(f"Student found: {student['name']} (confidence: {1-distance:.2%})")
                 return student_id, student['name']
+            else:
+                print(f"Student not found in database: {student_id}")
+        else:
+            print("No match found in DeepFace results")
         
         return None, None
+        
     except Exception as e:
         print(f"Recognition error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Cleanup on error
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+        if temp_db and os.path.exists(temp_db):
+            shutil.rmtree(temp_db)
+        
         return None, None
 
 if __name__ == "__main__":
