@@ -116,22 +116,24 @@ Try these endpoints:
 2. **GET /api/attendance/today** - Check today's attendance
 3. **POST /api/camera/start** - Start camera monitoring
 
-### Step 5: Generate Frontend with Lovable
+### Step 5: Run Frontend Application
 
-1. **Go to**: https://lovable.dev
-
-2. **Copy the prompt**: Open `lovable_prompt.md` and copy all content
-
-3. **Paste into Lovable**: Paste the prompt and let it generate the frontend
-
-4. **Download the project**: Lovable will generate a React project
-
-5. **Run the frontend**:
+1. **Navigate to frontend**:
 ```bash
-cd frontend  # (the downloaded Lovable project)
+cd frontend
+```
+
+2. **Install dependencies**:
+```bash
 npm install
+```
+
+3. **Start development server**:
+```bash
 npm run dev
 ```
+
+4. **Open in browser**: `http://localhost:8080`
 
 ✅ Frontend is now running at: `http://localhost:5173` (or similar)
 
@@ -276,6 +278,6 @@ Your Smart Classroom Attendance System is now running!
 
 - Backend API: `http://localhost:8000`
 - API Docs: `http://localhost:8000/docs`
-- Frontend: `http://localhost:5173` (after Lovable generation)
+- Frontend: `http://localhost:8080`
 
 Happy monitoring! 🚀

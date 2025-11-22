@@ -5,7 +5,7 @@
 This project consists of three main components:
 
 1. **Backend API** (FastAPI + MongoDB) - Handles all business logic and database operations
-2. **Frontend** (Lovable/React) - Modern web interface for teachers and administrators
+2. **Frontend** (React + TypeScript) - Modern web interface for teachers and administrators
 3. **Database** (MongoDB) - Stores student data, photos, attendance records, and suspicious activities
 
 ## 🏗️ Architecture
@@ -13,7 +13,7 @@ This project consists of three main components:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        FRONTEND                              │
-│                    (Lovable/React)                           │
+│                  (React + TypeScript)                        │
 │  - Live Monitoring Dashboard                                 │
 │  - Student Management                                        │
 │  - Attendance Reports                                        │
@@ -55,7 +55,7 @@ smart-classroom-attendance/
 │   ├── .env.example                  # Environment variables template
 │   └── README.md                     # Backend documentation
 │
-├── frontend/                         # Lovable/React Frontend (to be generated)
+├── frontend/                         # React + TypeScript Frontend
 │   ├── src/
 │   ├── public/
 │   ├── package.json
@@ -72,7 +72,6 @@ smart-classroom-attendance/
 │       │   └── STU001_with_glasses.jpg
 │       └── STU002/
 │
-├── lovable_prompt.md                 # Prompt for Lovable frontend generation
 ├── PROJECT_STRUCTURE.md              # This file
 └── README.md                         # Main project README
 ```
@@ -138,14 +137,19 @@ python setup_database_mongo.py
 # 3. View registered students
 ```
 
-### 4. Frontend Setup (Using Lovable)
+### 4. Frontend Setup
 
 ```bash
-# 1. Go to https://lovable.dev
-# 2. Copy the content from lovable_prompt.md
-# 3. Paste into Lovable
-# 4. Lovable will generate the React frontend
-# 5. Download and run the generated project
+# 1. Navigate to frontend directory
+cd frontend
+
+# 2. Install dependencies
+npm install
+
+# 3. Start development server
+npm run dev
+
+# 4. Open browser at http://localhost:8080
 
 cd frontend
 npm install
@@ -368,7 +372,7 @@ python setup_database_mongo.py
 - **Backend API**: `http://localhost:8000/docs` (Swagger UI)
 - **Backend README**: `backend/README.md`
 - **Database Module**: See docstrings in `database_mongo.py`
-- **Frontend Prompt**: `lovable_prompt.md`
+- **Frontend**: React application in `frontend/` directory
 
 ## 🤝 Contributing
 
